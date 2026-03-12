@@ -1,8 +1,11 @@
 name: crypto-ai
 
+permissions:
+  contents: write
+
 on:
   schedule:
-    - cron: "*/30 * * * *"
+    - cron: "*/1 * * * *"
   workflow_dispatch:
 
 jobs:
