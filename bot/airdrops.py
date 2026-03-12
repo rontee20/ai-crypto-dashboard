@@ -1,0 +1,26 @@
+import json
+
+airdrops = [
+
+{
+"name":"Layer2 Testnet Campaign",
+"task":"Bridge + swap + Galxe quests",
+"reward":"Possible token airdrop"
+},
+
+{
+"name":"AI Compute Network",
+"task":"Run node or stake tokens",
+"reward":"Early user rewards"
+},
+
+{
+"name":"Gaming L2 Airdrop",
+"task":"Play testnet game",
+"reward":"NFT + token rewards"
+}
+
+]
+
+with open("data/airdrops.json","w") as f:
+ json.dump(airdrops,f)
