@@ -1,370 +1,49 @@
-import { useState, useCallback } from "react";
+name: crypto-ai
 
-const FIXES = [
-  {
-    id: "concurrency",
-    label: "Add concurrency lock",
-    description: "Prevents parallel runs from conflicting",
-    detect: (yaml) => !yaml.includes("concurrency:"),
-    fix: (yaml) => {
-      const onIndex = yaml.indexOf("\non:");
-      if (onIndex === -1) return yaml;
-      const insert = `\nconcurrency:\n  group: crypto-bot\n  cancel-in-progress: false\n`;
-      return yaml.slice(0, onIndex) + insert + yaml.slice(onIndex);
-    },
-  },
-  {
-    id: "fetchDepth",
-    label: "Add fetch-depth: 0",
-    description: "Ensures full git history for rebasing",
-    detect: (yaml) =>
-      yaml.includes("actions/checkout") && !yaml.includes("fetch-depth"),
-    fix: (yaml) =>
-      yaml.replace(
-        /(uses: actions\/checkout@[^\n]+\n(\s+)with:(?:\n\s+[^\n]+)*)/,
-        (match) => {
-          if (match.includes("fetch-depth")) return match;
-          return match.trimEnd() + "\n          fetch-depth: 0";
-        }
-      ),
-  },
-  {
-    id: "gitOrder",
-    label: "Fix git push order",
-    description: "Moves git pull --rebase after commit, before push",
-    detect: (yaml) => {
-      const pullIdx = yaml.indexOf("git pull");
-      const addIdx = yaml.indexOf("git add");
-      return pullIdx !== -1 && addIdx !== -1 && pullIdx < addIdx;
-    },
-    fix: (yaml) => yaml,
-  },
-  {
-    id: "commitBlock",
-    label: "Replace commit/push block",
-    description: "Correct add → commit → pull --rebase → push order",
-    detect: (yaml) => yaml.includes("git push"),
-    fix: (yaml) => {
-      // Find and replace the run block inside the commit step
-      const commitStep = yaml.match(/(\s+)- name: Commit[\s\S]*?git push[^\n]*/);
-      if (!commitStep) return yaml;
-      const indent = commitStep[1];
-      const newBlock = `${indent}- name: Commit and push updates
-${indent}  run: |
-${indent}    git config user.name "github-actions"
-${indent}    git config user.email "actions@github.com"
-${indent}    git add data/*.json
-${indent}    git diff --cached --quiet && echo "No changes" && exit 0
-${indent}    git commit -m "update bot data"
-${indent}    git pull origin main --rebase
-${indent}    git push origin main`;
-      return yaml.replace(/(\s+)- name: Commit[\s\S]*?git push[^\n]*/, newBlock);
-    },
-  },
-  {
-    id: "permissions",
-    label: "Add write permissions",
-    description: "Required to push back to the repository",
-    detect: (yaml) => !yaml.includes("permissions:"),
-    fix: (yaml) => {
-      const nameMatch = yaml.match(/^name:.*\n/m);
-      if (!nameMatch) return yaml;
-      const idx = yaml.indexOf(nameMatch[0]) + nameMatch[0].length;
-      return yaml.slice(0, idx) + "permissions:\n  contents: write\n" + yaml.slice(idx);
-    },
-  },
-];
+permissions:
+  contents: write
 
-function applyAllFixes(yaml) {
-  let result = yaml;
-  const applied = [];
-  for (const fix of FIXES) {
-    if (fix.detect(result)) {
-      result = fix.fix(result);
-      applied.push(fix);
-    }
-  }
-  return { fixed: result, applied };
-}
+concurrency:
+  group: crypto-bot
+  cancel-in-progress: false
 
-function DiffView({ original, fixed }) {
-  const origLines = original.split("\n");
-  const fixedLines = fixed.split("\n");
-  const maxLen = Math.max(origLines.length, fixedLines.length);
-  const rows = [];
-  let i = 0, j = 0;
-  while (i < origLines.length || j < fixedLines.length) {
-    const o = origLines[i] ?? null;
-    const f = fixedLines[j] ?? null;
-    if (o === f) {
-      rows.push({ type: "same", line: o });
-      i++; j++;
-    } else if (o !== null && (f === null || !fixedLines.slice(j).includes(o))) {
-      rows.push({ type: "removed", line: o });
-      i++;
-    } else if (f !== null && (o === null || !origLines.slice(i).includes(f))) {
-      rows.push({ type: "added", line: f });
-      j++;
-    } else {
-      rows.push({ type: "removed", line: o });
-      rows.push({ type: "added", line: f });
-      i++; j++;
-    }
-  }
-  return (
-    <div style={{ fontFamily: "'JetBrains Mono', 'Fira Code', monospace", fontSize: "12px", lineHeight: "1.6" }}>
-      {rows.map((row, idx) => (
-        <div
-          key={idx}
-          style={{
-            padding: "1px 12px",
-            background: row.type === "added" ? "rgba(74,222,128,0.12)" : row.type === "removed" ? "rgba(248,113,113,0.12)" : "transparent",
-            borderLeft: row.type === "added" ? "3px solid #4ade80" : row.type === "removed" ? "3px solid #f87171" : "3px solid transparent",
-            color: row.type === "added" ? "#4ade80" : row.type === "removed" ? "#f87171" : "#94a3b8",
-            whiteSpace: "pre",
-          }}
-        >
-          {row.type === "added" ? "+ " : row.type === "removed" ? "- " : "  "}
-          {row.line}
-        </div>
-      ))}
-    </div>
-  );
-}
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
 
-export default function App() {
-  const [input, setInput] = useState("");
-  const [result, setResult] = useState(null);
-  const [copied, setCopied] = useState(false);
-  const [tab, setTab] = useState("fixed");
-  const [dragging, setDragging] = useState(false);
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
 
-  const handleFix = useCallback(() => {
-    if (!input.trim()) return;
-    const { fixed, applied } = applyAllFixes(input);
-    setResult({ fixed, applied });
-    setTab("fixed");
-  }, [input]);
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
 
-  const handleCopy = () => {
-    if (!result) return;
-    navigator.clipboard.writeText(result.fixed);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
+      - name: Install dependencies
+        run: pip install requests
 
-  const handleDrop = (e) => {
-    e.preventDefault();
-    setDragging(false);
-    const file = e.dataTransfer.files[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = (ev) => setInput(ev.target.result);
-      reader.readAsText(file);
-    }
-  };
+      - name: Run scanner
+        run: python bot/scanner.py
 
-  return (
-    <div style={{
-      minHeight: "100vh",
-      background: "#0a0e1a",
-      color: "#e2e8f0",
-      fontFamily: "'Inter', sans-serif",
-      padding: "0",
-    }}>
-      {/* Header */}
-      <div style={{
-        borderBottom: "1px solid rgba(99,102,241,0.2)",
-        padding: "20px 40px",
-        display: "flex",
-        alignItems: "center",
-        gap: "12px",
-        background: "rgba(99,102,241,0.04)",
-      }}>
-        <div style={{
-          width: 36, height: 36, borderRadius: 8,
-          background: "linear-gradient(135deg, #6366f1, #8b5cf6)",
-          display: "flex", alignItems: "center", justifyContent: "center",
-          fontSize: 18,
-        }}>⚡</div>
-        <div>
-          <div style={{ fontSize: 18, fontWeight: 700, letterSpacing: "-0.5px", color: "#f1f5f9" }}>
-            YAML Fixer
-          </div>
-          <div style={{ fontSize: 12, color: "#64748b" }}>GitHub Actions Auto-Repair</div>
-        </div>
-        <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-          {["push rejected", "rebase order", "concurrency"].map(tag => (
-            <span key={tag} style={{
-              padding: "3px 10px", borderRadius: 20, fontSize: 11,
-              background: "rgba(99,102,241,0.15)", color: "#818cf8",
-              border: "1px solid rgba(99,102,241,0.3)",
-            }}>{tag}</span>
-          ))}
-        </div>
-      </div>
+      - name: Run airdrop bot
+        run: python bot/airdrops.py
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 0, height: "calc(100vh - 77px)" }}>
-        {/* LEFT: Input */}
-        <div style={{ borderRight: "1px solid rgba(99,102,241,0.15)", display: "flex", flexDirection: "column" }}>
-          <div style={{
-            padding: "14px 20px", borderBottom: "1px solid rgba(99,102,241,0.1)",
-            display: "flex", alignItems: "center", justifyContent: "space-between",
-          }}>
-            <span style={{ fontSize: 13, fontWeight: 600, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.08em" }}>
-              Input YAML
-            </span>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button
-                onClick={() => setInput("")}
-                style={{
-                  padding: "4px 12px", borderRadius: 6, fontSize: 12,
-                  background: "transparent", border: "1px solid rgba(148,163,184,0.2)",
-                  color: "#64748b", cursor: "pointer",
-                }}
-              >Clear</button>
-              <button
-                onClick={handleFix}
-                disabled={!input.trim()}
-                style={{
-                  padding: "6px 18px", borderRadius: 6, fontSize: 13, fontWeight: 600,
-                  background: input.trim() ? "linear-gradient(135deg, #6366f1, #8b5cf6)" : "rgba(99,102,241,0.2)",
-                  border: "none", color: input.trim() ? "#fff" : "#4b5563",
-                  cursor: input.trim() ? "pointer" : "not-allowed",
-                  transition: "all 0.2s",
-                }}
-              >
-                ⚡ Fix YAML
-              </button>
-            </div>
-          </div>
-          <div
-            onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
-            onDragLeave={() => setDragging(false)}
-            onDrop={handleDrop}
-            style={{ flex: 1, position: "relative" }}
-          >
-            {dragging && (
-              <div style={{
-                position: "absolute", inset: 0, zIndex: 10,
-                background: "rgba(99,102,241,0.1)",
-                border: "2px dashed #6366f1",
-                display: "flex", alignItems: "center", justifyContent: "center",
-                fontSize: 16, color: "#818cf8",
-              }}>Drop .yml file here</div>
-            )}
-            <textarea
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder={"Paste your GitHub Actions YAML here...\n\nOr drop a .yml file"}
-              style={{
-                width: "100%", height: "100%", padding: "20px",
-                background: "transparent", border: "none", outline: "none",
-                color: "#cbd5e1", fontSize: 13, lineHeight: 1.7,
-                fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
-                resize: "none", boxSizing: "border-box",
-              }}
-            />
-          </div>
-        </div>
+      - name: Run signal engine
+        run: python bot/signal_engine.py
 
-        {/* RIGHT: Output */}
-        <div style={{ display: "flex", flexDirection: "column" }}>
-          <div style={{
-            padding: "14px 20px", borderBottom: "1px solid rgba(99,102,241,0.1)",
-            display: "flex", alignItems: "center", justifyContent: "space-between",
-          }}>
-            <div style={{ display: "flex", gap: 0 }}>
-              {["fixed", "diff", "issues"].map(t => (
-                <button
-                  key={t}
-                  onClick={() => setTab(t)}
-                  style={{
-                    padding: "5px 14px", fontSize: 12, fontWeight: 600,
-                    textTransform: "uppercase", letterSpacing: "0.06em",
-                    background: tab === t ? "rgba(99,102,241,0.2)" : "transparent",
-                    border: "1px solid",
-                    borderColor: tab === t ? "rgba(99,102,241,0.5)" : "transparent",
-                    color: tab === t ? "#818cf8" : "#475569",
-                    cursor: "pointer",
-                    borderRadius: t === "fixed" ? "6px 0 0 6px" : t === "issues" ? "0 6px 6px 0" : "0",
-                  }}
-                >{t}</button>
-              ))}
-            </div>
-            {result && (
-              <button
-                onClick={handleCopy}
-                style={{
-                  padding: "5px 14px", borderRadius: 6, fontSize: 12, fontWeight: 600,
-                  background: copied ? "rgba(74,222,128,0.15)" : "rgba(99,102,241,0.15)",
-                  border: `1px solid ${copied ? "rgba(74,222,128,0.4)" : "rgba(99,102,241,0.3)"}`,
-                  color: copied ? "#4ade80" : "#818cf8", cursor: "pointer",
-                  transition: "all 0.2s",
-                }}
-              >{copied ? "✓ Copied!" : "Copy"}</button>
-            )}
-          </div>
-
-          <div style={{ flex: 1, overflow: "auto" }}>
-            {!result ? (
-              <div style={{
-                height: "100%", display: "flex", flexDirection: "column",
-                alignItems: "center", justifyContent: "center", gap: 12, color: "#334155",
-              }}>
-                <div style={{ fontSize: 48 }}>🔧</div>
-                <div style={{ fontSize: 15, fontWeight: 500 }}>Paste your YAML and click Fix</div>
-                <div style={{ fontSize: 13, color: "#1e293b" }}>Fixes push rejections, rebase order, concurrency & more</div>
-              </div>
-            ) : tab === "fixed" ? (
-              <pre style={{
-                margin: 0, padding: "20px",
-                fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
-                fontSize: 13, lineHeight: 1.7, color: "#94a3b8",
-                whiteSpace: "pre-wrap", wordBreak: "break-word",
-              }}>{result.fixed}</pre>
-            ) : tab === "diff" ? (
-              <div style={{ padding: "10px 0" }}>
-                <DiffView original={input} fixed={result.fixed} />
-              </div>
-            ) : (
-              <div style={{ padding: "20px", display: "flex", flexDirection: "column", gap: 12 }}>
-                {result.applied.length === 0 ? (
-                  <div style={{
-                    padding: 20, borderRadius: 10,
-                    background: "rgba(74,222,128,0.08)", border: "1px solid rgba(74,222,128,0.2)",
-                    color: "#4ade80", fontSize: 14, textAlign: "center",
-                  }}>✅ No issues found — your YAML looks good!</div>
-                ) : (
-                  <>
-                    <div style={{ fontSize: 12, color: "#475569", marginBottom: 4 }}>
-                      {result.applied.length} issue{result.applied.length > 1 ? "s" : ""} detected & fixed
-                    </div>
-                    {result.applied.map((fix) => (
-                      <div key={fix.id} style={{
-                        padding: "14px 16px", borderRadius: 10,
-                        background: "rgba(99,102,241,0.07)",
-                        border: "1px solid rgba(99,102,241,0.2)",
-                      }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                          <span style={{
-                            width: 20, height: 20, borderRadius: "50%",
-                            background: "rgba(74,222,128,0.15)", border: "1px solid #4ade80",
-                            display: "flex", alignItems: "center", justifyContent: "center",
-                            fontSize: 11, color: "#4ade80", flexShrink: 0,
-                          }}>✓</span>
-                          <span style={{ fontWeight: 600, fontSize: 14, color: "#c7d2fe" }}>{fix.label}</span>
-                        </div>
-                        <div style={{ fontSize: 13, color: "#64748b", paddingLeft: 28 }}>{fix.description}</div>
-                      </div>
-                    ))}
-                  </>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
+      - name: Commit and push updates
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add data/*.json
+          git diff --cached --quiet && echo "No changes" && exit 0
+          git commit -m "update bot data"
+          git pull origin main --rebase
+          git push origin main
