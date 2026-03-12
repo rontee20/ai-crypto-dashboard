@@ -5,7 +5,7 @@ permissions:
 
 on:
   schedule:
-    - cron: "*/1 * * * *"
+    - cron: "*/30 * * * *"
   workflow_dispatch:
 
 jobs:
@@ -13,21 +13,34 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v3
 
-      - uses: actions/setup-python@v4
+      - name: Checkout repo
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
         with:
           python-version: "3.10"
 
-      - run: pip install requests
+      - name: Install dependencies
+        run: pip install requests
 
-      - run: python bot/scanner.py
-      - run: python bot/airdrops.py
-      - run: python bot/signal_engine.py
+      - name: Run scanner
+        run: python bot/scanner.py
 
-      - run: |
-          git config --global user.name bot
-          git config --global user.email bot@github.com
+      - name: Run airdrop scanner
+        run: python bot/airdrops.py
+
+      - name: Run signal engine
+        run: python bot/signal_engine.py
+
+      - name: Commit updates
+        run: |
+          git config --global user.name "github-actions"
+          git config --global user.email "actions@github.com"
+          git pull --rebase
           git add .
-          git commit -m "update data" || echo "no changes"
+          git commit -m "update bot data" || echo "no changes"
           git push
